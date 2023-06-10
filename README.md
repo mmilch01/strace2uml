@@ -1,6 +1,6 @@
 # strace2uml
-# Prerequisites: 
-<br>(1) strace https://github.com/strace/strace, <br>(2) PlantUML jar 1.2023.6+
+# Prerequisites
+(1) strace https://github.com/strace/strace, <br>(2) PlantUML jar 1.2023.6+
 
 # Usage: <br>
 #first, trace the script.<br>
