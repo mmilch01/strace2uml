@@ -1,0 +1,233 @@
+#!/bin/bash
+
+declare -A linux_commands=( [alias]=1 [apropos]=1 [apt]=1 [apt-get]=1 [aptitude]=1 [aspell]=1 [at]=1 [awk]=1 [base32]=1 [base64]=1 [basename]=1 [bc]=1\
+ [bg]=1 [bind]=1 [builtin]=1 [bzip2]=1 [cal]=1 [caller]=1 [cat]=1 [cfdisk]=1 [chattr]=1 [chgrp]=1 [chmod]=1 [chown]=1 [chpasswd]=1 [chroot]=1 [chkconfig]=1 \
+ [cksum]=1 [clear]=1 [cmp]=1 [comm]=1 [cpio]=1 [cron]=1 [crontab]=1 [csplit]=1 [curl]=1 [cut]=1 [date]=1 [dc]=1 [dd]=1 [ddrescue]=1 [df]=1 [diff]=1 [diff3]=1 \
+ [dig]=1 [dircolors]=1 [dirname]=1 [dos2unix]=1 [dmesg]=1 [dpkg]=1 [du]=1 [egrep]=1 [eject]=1 [enable]=1 [env]=1 [ethtool]=1 [expect]=1 [expand]=1 [export]=1 \
+ [expr]=1 [fdformat]=1 [fdisk]=1 [fg]=1 [fgrep]=1 [fmt]=1 [fold]=1 [free]=1 [fsck]=1 [ftp]=1 [fuser]=1 [gawk]=1 [getopt]=1 [getopts]=1 [groupadd]=1 [groupdel]=1 [groupmod]=1 \
+ [groups]=1 [gzip]=1 [grep]=1 [hash]=1 [head]=1 [help]=1 [history]=1 [hostname]=1 [htop]=1 [iconv]=1 [id]=1 [ifconfig]=1 [ifdown]=1 [ifup]=1 [import]=1 [install]=1 \
+ [iostat]=1 [ip]=1 [jobs]=1 [join]=1 [kill]=1 [killall]=1 [less]=1 [let]=1 [link]=1 [ln]=1 [locate]=1 [logname]=1 [logout]=1 [look]=1 [lpc]=1 [lpr]=1 [lprint]=1 \
+ [lprintd]=1 [lprintq]=1 [lprm]=1 [ls]=1 [lsattr]=1 [lsblk]=1 [lsof]=1 [lspci]=1 [make]=1 [man]=1 [mapfile]=1 [mkfifo]=1 [mkfile]=1 [mkisofs]=1 [mknod]=1 [more]=1 \
+ [most]=1 [mount]=1 [mtools]=1 [mtr]=1 [mmv]=1 [mkdir]=1 [nc]=1 [netstat]=1 [nft]=1 [nice]=1 [nl]=1 [nohup]=1 [notify-send]=1 [nslookup]=1 [open]=1 [op]=1 [passwd]=1 [paste]=1 [pathchk]=1\
+ [Perf]=1 [ping]=1 [pgrep]=1 [pkill]=1 [printcap]=1 [printenv]=1 [printf]=1 [ps]=1 [pv]=1 [quota]=1 [quotacheck]=1 [ram]=1 [rar]=1 [rcp]=1 [read]=1 [readarray]=1 \
+ [readonly]=1 [reboot]=1 [rename]=1 [renice]=1 [remsync]=1 [rm]=1 [readlink]=1 [rev]=1 [rmdir]=1 [rsync]=1 [screen]=1 [scp]=1 [sdiff]=1 [sh]=1 [sed]=1 [select]=1 [seq]=1 [sftp]=1 [shopt]=1 \
+ [shuf]=1 [shutdown]=1 [sleep]=1 [slocate]=1 [sort]=1 [source]=1 [split]=1 [ss]=1 [ssh]=1 [stat]=1 [strace]=1 [su]=1 [sudo]=1 [sum]=1 [suspend]=1 [sync]=1 [tail]=1 \
+ [tar]=1 [tee]=1 [test]=1 [time]=1 [timeout]=1 [times]=1 [tmux]=1 [touch]=1 [top]=1 [tput]=1 [traceroute]=1 [trap]=1 [tr]=1 [tsort]=1 [tty]=1 [type]=1 [ulimit]=1 \
+ [umask]=1 [umount]=1 [unalias]=1 [uname]=1 [unexpand]=1 [uniq]=1 [unzip]=1 [units]=1 [unix2dos]=1 [unrar]=1 [unshar]=1 [until]=1 [uptime]=1 [useradd]=1 [userdel]=1 \
+ [usermod]=1 [users]=1 [uuencode]=1 [uudecode]=1 [vdir]=1 [vi]=1 [vmstat]=1 [wait]=1 [watch]=1 [wc]=1 [whereis]=1 [which]=1 [who]=1 [whoami]=1 [wget]=1 [write]=1 \
+ [xargs]=1 [xdg-open]=1 [xz]=1 [yes]=1 [zip]=1 [fslval]=1 [fslhd]=1 [python]=1 [remove_ext]=1)
+
+RC="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
+source $RC/stack.src
+
+#sed line patterns to exclude.
+exclude_line='/\/etc\/ld.so.cache/d;/\/lib64\//d;/\/dev\//d;/\/proc\//d;/\/usr\/lib64\//d;/\/usr\/lib\//d;/\/lib\//d;/\/etc\//d;/.shlib/d;/\/tmp\//d;/.sh.o/d;/.sh.e/d'
+#echo $exclude_libs_line
+
+declare -A pid_exclude #declare makes pid_exclude local
+declare -A pid_exclude_reads #number of reads for this excluded process.
+declare -A pid_all #values of type pid=[command]
+declare -A pid_valid #valid process ID's, to be reported
+pid_valid_arr=() #valid process ID array ordered by time of start
+declare -A pid_in
+declare -A pid_out
+
+function clear_arrays()
+{
+    pid_exclude=()
+    pid_exclude_reads=()
+    pid_all=()
+    pid_valid_arr=()
+    pid_in=()
+    pid_out=()
+}
+
+function last_valid_process
+{
+    local i n pid=$1
+    n=${#pid_valid_arr[@]}
+    for (( i=n-1; i>=0; i-- )); do
+        if [ -n "${pid_valid_arr[i]}" ]; then 
+            echo ${pid_valid_arr[i]}
+            return
+        fi
+    done
+}
+
+function exit_valid_process
+{
+    local i n pid=$1
+    pid_valid[$pid]=''
+    n=${#pid_valid_arr[@]}
+
+    for (( i=n-1; i>=0; i-- )); do
+        if [ "${pid_valid_arr[i]}" == "$pid" ]; then 
+            pid_valid_arr[i]=''; break;
+        fi
+    done
+    pid_valid[$pid]=''
+}
+
+function is_read_mode
+{
+    local mode=$1 modes
+    declare -A codes=(
+        [O_RDONLY]=0 [O_WRONLY]=0 [O_RDWR]=0 [O_CREAT]=0
+        [O_TRUNC]=0 [O_APPEND]=0 [O_NONBLOCK]=0 [O_EXCL]=0
+        [O_CLOEXEC]=0
+    )
+    IFS='|' read -r -a modes <<< "$mode"   
+    for m in "${modes[@]}"; do codes["$m"]=1; done
+    if (( codes[O_RDONLY] )); then echo 1; else echo 0; fi
+}
+
+function include_io
+{
+    local pid=$1 is_read=$2 fil=$3 files f
+    #is_read=`is_read_mode "$mode"`
+    if (( is_read )); then 
+        IFS="|" read -r -a files <<< ${pid_in[$pid]}
+        for f in ${files[*]}; do
+            if [ "$f" == "$fil" ]; then echo 0; return; fi
+        done
+    else
+        IFS="|" read -r -a files <<< ${pid_out[$pid]}
+        for f in ${files[*]}; do
+            if [ "$f" == "$fil" ]; then echo 0; return; fi
+        done
+    fi
+    echo 1
+}
+
+_debug=0
+#filter
+function filter_log
+{
+    local in=$1 out=$2 i=0 t stack_var _debug=0
+    #stack_new pid_stack
+
+    rm -f $out
+    i=0
+    #first, pre-filter
+    #1. Pre-filter: remove lines opening files from common library locations.
+    t=`mktemp XXXX.log`
+    sed $exclude_line $in > $t
+    while read line; do
+        lin=($line)
+        pid=${lin[0]}
+        #pid_all[$pid]=1
+        #match process start
+        if [[ "$line" =~ ^[0-9]+\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ execve\(\"(.*)\", ]]; then 
+            if (( _debug )); then echo cmd: ${BASH_REMATCH[1]}; fi
+            #echo 1
+            cmd=${lin[2]}; cmd=${cmd#execve(\"}; cmd=${cmd%\"*}; cmd=`basename "$cmd"`
+            pid_all[$pid]=$cmd
+            pid_in[$pid]=1
+
+            if [ -n "${linux_commands[$cmd]}" ]; then 
+                #echo 1
+                pid_exclude[$pid]=1
+                pid_exclude_reads[$pid]=0
+                #echo "pid_exclude: $pid"
+            else
+                #echo "adding to pid stack: $pid"
+                pid_valid[$pid]=1
+                pid_valid_arr+=($pid)
+                #stack_push pid_stack $pid
+                #echo $line
+                echo $line >> $out
+            fi
+        #match file i/o
+        elif [[ "$line" =~ ^[0-9]+\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ open\(\"(.*)\", ]]; then 
+            #echo open detected.
+            #get file name.
+            fil=${lin[2]}; fil=${fil#open(\"}; fil=${fil%\"*}; fil=`basename "$fil"`
+            if (( _debug )); then echo fil:$fil, pid: ${pid_all[$pid]}; fi
+
+            #read or write?
+            mode=${line#*, }; mode=${mode%)*}
+            is_read=`is_read_mode "$mode"`
+
+            #check if already included in i/o array for that process.
+            if (( _debug )); then echo "pid_out[$pid]: ${pid_out[$pid]}"; fi
+            if (( _debug )); then echo "pid_in[$pid]: ${pid_in[$pid]}"; fi
+
+            #check if file name and command match. Exclude these (file open of exe file)
+            if [ "$fil" == "${pid_all[$pid]}" ]; then 
+                if (( _debug )); then 
+                    echo "excluding file open $fil because it matches previously launched process executable name ${pid_all[$pid]}"
+                    continue
+                fi
+            elif [ -n "${pid_exclude[$pid]}" ]; then #assign file i/o of excluded process to current process.
+                #stack_pop pid_stack stack_var #pop pid
+                lin[0]=`last_valid_process`
+                if (( _debug )); then echo "file i/o of excluded process $pid assinged to current process ${lin[0]}"; fi
+                #stack_push pid_stack $stack_var #push it back, may reuse later
+                if [ -z "${lin[0]}" ]; then 
+                    echo "parsing log ERROR: no valid parent process for $pid"
+                    echo "process stack: ${#pid_valid_arr[*]} ${pid_valid_arr[*]}"
+                    last_valid_process
+                    exit -1
+                fi                
+                #exit -1
+            else
+                if (( _debug )); then echo "file i/o of $pid reported: $line"; fi
+                #echo $line >> $out
+            fi
+            pid_new=${lin[0]}
+            is_include=`include_io $pid_new $is_read $fil`
+            if (( is_include )); then 
+                if (( _debug )); then echo "pid: $pid_new INCLUDING file i/o: $fil, is_read: $is_read"; fi
+                if (( is_read )); then pid_in[$pid]="${pid_in[$pid]}|$fil"
+                else pid_out[$pid]="${pid_out[$pid]}|$fil"
+                fi
+            else 
+                if (( _debug )); then echo "pid: $pid_new NOT INCLUDING file i/o: $fil, is_read: $is_read"; fi
+                continue
+            fi
+            echo ${lin[*]} >> $out
+            #exit -1
+        #match process exit
+        elif [[ "$line" =~ ^[0-9]+\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ \+\+\+\ exited\ with\ 0\ \+\+\+$ ]]; then 
+            #echo "exit detected, pid: $pid"
+            #echo 3
+            if [ -n "${pid_valid[$pid]}" ]; then
+                if (( _debug )); then echo "reporting exit for $pid"; fi
+                exit_valid_process $pid
+                #echo $line
+                #pid_valid[$pid]=""
+                #stack_pop pid_stack stack_var
+                echo $line >> $out            
+            else
+                if (( _debug )); then echo "not reporting exit for excluded $pid"; fi
+                #stack_print pid_stack
+            fi
+        fi
+        ((i++))
+        if (( i % 1000 == 0 )); then 
+            echo "line $i"
+        fi
+    done <$t
+    rm -f $t
+}
+
+if [ -z "$2" ]; then 
+    echo "usage: strace_log_filter <strace log file> <output file>"    
+    exit -1
+fi
+
+log_in=$1; shift
+log_out=$1; shift
+t=`mktemp XXXX.log`
+trap "rm $t" EXIT
+
+#two iterations to filter out deeper nested i/o trees.
+#filter_log $log_in $log_out
+#exit 0
+
+echo "iteration 1.."
+filter_log $log_in $t
+clear_arrays
+echo "iteration 2.."
+filter_log $t $log_out
+echo "done"

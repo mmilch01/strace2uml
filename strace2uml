@@ -1,0 +1,311 @@
+#!/bin/bash
+
+RC="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
+#stack library
+#source $RC/stack.src
+
+
+#RC="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
+#stack library
+#source $RC/stack.src
+
+function is_read_mode
+{
+    local mode=$1 modes
+    declare -A codes=(
+        [O_RDONLY]=0 [O_WRONLY]=0 [O_RDWR]=0 [O_CREAT]=0
+        [O_TRUNC]=0 [O_APPEND]=0 [O_NONBLOCK]=0 [O_EXCL]=0
+        [O_CLOEXEC]=0
+    )
+    IFS='|' read -r -a modes <<< "$mode"   
+    for m in "${modes[@]}"; do codes["$m"]=1; done
+    if (( codes[O_RDONLY] )); then echo 1; else echo 0; fi
+}
+
+#process ID's
+declare -a g_pids=()
+#commands
+declare -a g_cmds=()
+#process exit entries
+declare -a g_exits=()
+#process input files
+declare -A g_inputs=()
+#process output files
+declare -A g_outputs=()
+# Convert the mode string to an array of mode codes
+declare -A g_io=()
+
+_debug=0
+EOL=$'\n'
+CG="<color:green>"
+CR="<color:red>"
+EC="</color>$EOL"
+
+
+# Function to convert strace output to arrays of launched processes, exits, and i/o.
+function parse_log
+{
+    local i=0 line lin mode is_read pid file
+    while read line; do
+        g_cmds[i]=""; g_exits[i]=0
+        #echo $line
+        lin=($line)
+        pid=${lin[0]}
+        g_pids+=($pid)
+        if (( _debug )); then echo LINE: $line; fi
+        #launches of processes
+        if [[ "$line" =~ ^[0-9]+\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ execve\(\"(.*)\", ]]; then 
+            #echo cmd: ${BASH_REMATCH[1]}
+            cmd=${lin[2]}; cmd=${cmd#execve(\"*}; cmd=${cmd%\"*}
+            if (( _debug )); then echo "i=$i, cmd detected: $cmd"; fi
+            g_cmds[i]=`basename "$cmd"`
+        #exits of processes
+        elif [[ "$line" =~ ^[0-9]+\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ \+\+\+\ exited\ with\ 0\ \+\+\+$ ]]; then 
+            if (( _debug )); then echo "i=$i, exit detected for process $pid"; fi
+            #echo exit: ${BASH_REMATCH[1]}
+            g_exits[i]=1
+        elif [[ "$line" =~ ^[0-9]+\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ open\(\"(.*)\", ]]; then #file open for read or write
+            mode=${line#*, }; mode=${mode%)*}
+            if (( _debug )); then echo "i=$i, file open mode: $mode"; fi
+            is_read=`is_read_mode "$mode"`
+            file=${lin[2]}; file=${file#open(\"*}; file=${file%\"*}; file=`basename "$file"`
+
+            #put inputs and/or outputs into associative array with entries of type:
+            # <process_id>|file_name : [1] if exists
+            # this will exclude duplicate entries and allow to associate process <-> file <-> unique/non-unique.
+            if (( is_read==1 )); then 
+                if (( _debug )); then echo "i=$i, read detected for process $pid, file $file"; fi
+                g_io[$pid]="${g_io[$pid]}${CG}$file$EC"
+                g_inputs[$pid|$file]=1
+            else
+                if (( _debug )); then echo "i=$i, write detected for process $pid, file $file"; fi
+                g_outputs[$pid|$file]=1
+                g_io[$pid]="${g_io[$pid]}${CR}$file$EC"
+            fi
+        fi
+        ((i++))
+    done < $1
+    #echo g_cmds: ${#g_cmds[*]} ${g_cmds[*]}
+    #echo g_pids: ${#g_pids[*]} ${g_pids[*]}
+    #echo g_exits: ${#g_exits[*]} ${g_exits[*]}
+    #echo g_inputs: ${#g_inputs[*]} ${g_inuts[*]}
+    #echo g_outputs: ${#g_outputs[*]} ${g_outputs[*]}
+    
+    #find an exit address point for each process.
+    local c p j n ex_a
+    n=${#g_pids[*]}
+    for (( i=0; i<${#g_pids[*]}; i++ )); do
+        c=${g_cmds[i]}        
+        ex_addr[i]=-1
+        if [ -z "$c" ]; then continue; fi
+        p=${g_pids[i]}
+        ex_a=-1
+        #iterate over all subsequent lines, looking for g_exits with matching PID.
+        for (( j=i+1; j<n; j++ )); do
+            if (( ${g_exits[j]} != 1 )); then continue; fi
+            if [ "${g_pids[j]}" == "$p" ]; then ex_a=$j; fi
+        done
+        #if (( ex_a<0 )); then ex_a=$((n-1)); fi
+        ex_addr[i]=$ex_a
+    done
+}
+
+#keep track of processes that have already been stacked, to exclude duplicates.
+declare -A processes_in_stack=()
+
+function output_sequence
+{
+    #echo output_process $@
+    local ind=$1 n_splits=$2 cmd cur_cmd pid cur_pid ex_ad n cur_ex_ad tmp n_splits_local=0
+    cur_cmd=${g_cmds[ind]}
+    cur_pid=${g_pids[ind]}
+    cur_ex_ad=${ex_addr[ind]}    
+    #echo "cur_cmd: $cur_cmd, cur_pid: $cur_pid, cur_ex_ad: $cur_ex_ad"
+
+    #guarantee that each process is only included once.
+    if (( ${processes_in_stack[$cur_pid]} )); then return; fi
+    processes_in_stack[$cur_pid]=1
+
+    n=${#pid[*]}
+    echo ":$cur_cmd |"
+    echo "${g_io[$pid]}"
+
+    #echo split
+    #cycle to detect inputs and outputs of the current process
+    for (( i=ind+1; i<maxit; i++ )); do
+        echo -n "";
+    done
+
+    #cycle to detect processes between start and end of the current process
+    local i j maxit=$cur_ex_ad
+    for (( i=ind+1; i<maxit; i++ )); do
+        cmd=${g_cmds[i]}
+        if [ -z "$cmd" ]; then continue; fi
+        ex_ad=${ex_addr[i]}
+        pid=${g_pids[i]}
+        #process exit address > parent exit address, update
+        if (( ex_ad>cur_ex_ad )); then 
+            #echo "swapping $cur_ex_ad and $ex_ad"
+            #swap current exit address values
+            tmp=$cur_ex_ad
+            cur_ex_ad=$ex_ad
+            ex_ad=$tmp
+            #update indices of ex_addr
+            ex_addr[ind]=$cur_ex_ad
+            ex_addr[i]=$ex_ad
+        fi
+        #calls by the current process are included in the linear flow.
+        if (( pid == cur_pid )); then 
+            echo ":$cmd |"
+            continue
+        else
+            cur_pid=$pid
+        fi
+        #skip split on already included processes.
+        if (( ${processes_in_stack[$pid]} )); then continue; fi
+        
+        if (( n_splits_local==0 )); then
+            echo split
+        else 
+            echo split again
+        fi
+        output_process $i $n_splits_local
+        ((n_splits_local++))
+    done
+    if (( n_splits_local>0 )); then
+        echo end split
+    fi
+    #echo end output_process $@
+}
+
+function output_mindmap
+{
+    _debug=0
+    #echo output_process $@
+    local ind=$1 level=$2 cmd cur_cmd pid cur_pid ex_ad n cur_ex_ad tmp n_splits_local=0 s
+    cur_cmd=${g_cmds[ind]}
+    cur_pid=${g_pids[ind]}
+    cur_ex_ad=${ex_addr[ind]}
+    #echo "cur_cmd: $cur_cmd, cur_pid: $cur_pid, cur_ex_ad: $cur_ex_ad"
+
+    #guarantee that each process is only included once.
+    if (( ${processes_in_stack[$cur_pid]} )); then return; fi
+    processes_in_stack[$cur_pid]=1
+    n=${#pid[*]}
+
+    local s="" i
+    for (( i=0; i<level; i++ )); do s=$s'*'; done
+
+    if (( _debug )); then echo "DEBUG pid: $cur_pid", processes in stack: ${!processes_in_stack[*]}; fi
+    if (( _debug )); then echo "DEBUG process_exit: $cur_ex_ad"; fi
+    echo "$s:==$cur_cmd"
+
+    #write all i/o for this process.
+    s="${g_io[$cur_pid]}"; 
+    if (( ${#s}>0 )); then 
+        echo "${s::-1};"
+    else 
+        echo ";"
+    fi
+
+    #echo split
+    #cycle to detect inputs and outputs of the current process
+    
+    #cycle to detect processes between start and end of the current process
+    local i j maxit=$cur_ex_ad
+    for (( i=ind+1; i<maxit; i++ )); do
+        cmd=${g_cmds[i]}
+
+        #if (( _debug )); then echo "DEBUG cmd: $cmd, i: $i"; fi
+        if [ -z "$cmd" ]; then continue; fi
+        ex_ad=${ex_addr[i]}
+        pid=${g_pids[i]}
+        if (( _debug )); then echo "DEBUG detected subprocess: $pid, exit address: $ex_ad"; fi
+
+        #process exit address > parent exit address, update
+        if (( ex_ad>cur_ex_ad )); then 
+            #echo "swapping $cur_ex_ad and $ex_ad"
+            #swap current exit address values
+            tmp=$cur_ex_ad
+            cur_ex_ad=$ex_ad
+            ex_ad=$tmp
+            #update indices of ex_addr
+            ex_addr[ind]=$cur_ex_ad
+            ex_addr[i]=$ex_ad
+        fi
+        #calls by the current process are included in the linear flow.
+        #if (( pid == cur_pid )); then 
+        #    echo ":$cmd |"
+        #    continue
+        #else
+        #    cur_pid=$pid
+        #fi
+
+        #skip split on already included processes.
+        if (( ${processes_in_stack[$pid]} )); then continue; fi        
+        output_mindmap $i $((level+1))
+    done
+    #echo end output_process $@
+}
+
+# Check that an strace log file is specified
+if [ -z "$1" ]; then
+  echo "Usage: $0 <strace-log-file>"
+  exit 1
+fi
+
+parse_log $1
+
+
+if (( _debug )); then 
+    echo g_cmds: #${#g_cmds[*]} ${g_cmds[*]}
+    for (( i=0; i<${#g_cmds[*]}; i++ )); do echo $i ${g_cmds[i]}; done
+
+    echo g_inputs:
+    echo ${#g_inputs[*]}
+    echo ${!g_inputs[*]}
+    echo ${g_inputs[*]}
+    #for (( i=0; i<${#g_inputs[*]}; i++ )); do echo $i ${g_inputs[i]}; done
+    echo g_outputs: #${#g_outputs[*]} ${g_outputs[*]}
+    echo ${#g_outputs[*]}
+    echo ${!g_outputs[*]}
+    echo ${g_outputs[*]}
+
+    #for (( i=0; i<${#g_outputs[*]}; i++ )); do echo $i ${g_outputs[i]}; done
+
+    echo g_pids: ${#g_pids[*]} ${g_pids[*]}
+    echo g_exits: ${#g_exits[*]} ${g_exits[*]}
+
+    echo g_io: ${#g_io[*]}
+    echo g_io: ${g_io[*]}
+    echo g_io: ${g_io[*]}
+fi
+
+#echo g_outputs: ${#g_outputs[*]} ${g_outputs[*]}
+
+
+#echo "g_pids: ${g_pids[*]}"
+#echo "cmds: ${cmds[*]}"
+#echo "g_exits: ${g_exits[*]}"
+#echo "ex_addr: ${ex_addr[*]}"
+
+echo "@startmindmap"
+output_mindmap 0 1
+echo "@endmindmap"
+exit 0
+
+# Generate the PlantUML code for the activity diagram
+echo "@startuml"
+echo "start"
+  #for each cmd beginning: 
+    #1. find line where process starts and ends
+    #2. find all processes that start after this one
+    #3. Make sure their end lines precede the current process end line (swap if needed)
+    #4. write split clause
+    #5. repeat 1-4 for all subprocesses
+    #6. write end split clause.
+
+ output_sequence 0 0
+  #theoretically, only one mother process is processed on the top level.
+echo "stop"
+echo "@enduml"
