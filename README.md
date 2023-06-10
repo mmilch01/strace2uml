@@ -2,7 +2,7 @@
 # Prerequisites
 (1) strace https://github.com/strace/strace, <br>(2) PlantUML jar 1.2023.6+
 
-# Usage: <br>
+# Usage <br>
 #first, trace the script.<br>
 trace_io.sh <script to be traced> <script arguments><br>
 #second, filter the log file<br>
