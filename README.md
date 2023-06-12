@@ -1,6 +1,8 @@
 # strace2uml
 # Prerequisites
-(1) strace https://github.com/strace/strace, <br>(2) PlantUML jar 1.2023.6+ https://www.plantuml.com/plantuml
+(1) Tested on CentOS 7.9<br>
+(2) strace https://github.com/strace/strace, <br>
+(3) PlantUML jar 1.2023.6+ https://www.plantuml.com/plantuml
 
 # Usage <br>
 #first, trace the script.<br>
